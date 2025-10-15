@@ -1,0 +1,6 @@
+services:
+  frontend: # <-- This is the service name you need
+    build: .
+    container_name: pii-web-portal # This is the container name, NOT the service name
+    ports:
+      - "3001:3001"

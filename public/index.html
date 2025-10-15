@@ -542,7 +542,7 @@
                             <line x1="12" y1="3" x2="12" y2="15"></line>
                         </svg>
                         <p class="drop-text">Drop file here or click to browse</p>
-                        <p class="drop-subtext">Supported: CSV, TXT</p>
+                        <p class="drop-subtext">Supported: CSV, XLSX, XLS, TXT</p>
                     </div>
                     <input type="file" id="fileInput" accept=".csv,.txt" hidden>
                 </div>
@@ -564,6 +564,9 @@
                     <select id="fileTypeSelect" class="file-type-select">
                         <option value="">-- Select Type --</option>
                         <option value="csv">CSV</option>
+                        <option value="xlsx">XLSX (Support Cases)</option>
+                        <option value="xlsx_generic">XLSX (Generic)</option>
+                        <option value="xls">XLS (Support Cases)</option>
                         <option value="txt">TXT</option>
                     </select>
                     <div id="fileTypeWarning" class="file-type-warning" style="display: none;"></div>
