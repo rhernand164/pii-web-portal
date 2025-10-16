@@ -146,6 +146,49 @@
             margin-bottom: 0.5rem;
             display: block;
         }
+        
+        .label-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .tooltip-icon {
+            cursor: pointer;
+            color: #666;
+            position: relative;
+        }
+
+        .tooltip-text {
+            visibility: hidden;
+            width: 280px;
+            background-color: #555;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 10px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -140px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+        
+        .tooltip-text strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .tooltip-icon:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+
 
         .file-type-select {
             width: 100%;
@@ -413,6 +456,11 @@
             background-color: #ffebee;
             color: #f44336;
         }
+        
+        .modal-icon.warning {
+            background-color: #fff8e1;
+            color: #FFA726;
+        }
 
         .modal-content h2 {
             font-size: 1.75rem;
@@ -448,7 +496,6 @@
             background-color: #f0f0f0;
         }
 
-        /* About Modal Specific Styles */
         .about-modal-content {
             position: relative;
         }
@@ -487,13 +534,20 @@
             color: #555;
             margin: 0;
         }
-        .modal-content button {
+        .modal-content button, .modal-buttons button {
             margin-bottom: 0.5rem;
         }
         
-        .modal-content button:last-child {
+        .modal-content button:last-child, .modal-buttons button:last-child {
             margin-bottom: 0;
         }
+
+        .modal-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+
 
         @media (max-width: 1024px) {
             .container {
@@ -544,7 +598,7 @@
                         <p class="drop-text">Drop file here or click to browse</p>
                         <p class="drop-subtext">Supported: CSV, XLSX, XLS, TXT</p>
                     </div>
-                    <input type="file" id="fileInput" accept=".csv,.txt" hidden>
+                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.txt" hidden>
                 </div>
 
                 <div id="fileInfo" class="file-info" style="display: none;">
@@ -572,6 +626,29 @@
                     <div id="fileTypeWarning" class="file-type-warning" style="display: none;"></div>
                 </div>
 
+                <div id="sanitizeModeSection" class="file-type-section" style="display: none;">
+                    <div class="label-container">
+                        <label class="file-type-label" for="sanitizeModeSelect" style="margin-bottom: 0;">Select Sanitization Mode:</label>
+                        <div class="tooltip-icon">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                            <span class="tooltip-text">
+                                <strong>Fast (NLP Only):</strong> Uses pattern recognition and NLP for high-speed redaction. Excellent for common PII like emails, IPs, and keywords. (~85% accuracy)
+                                <br><br>
+                                <strong>Detailed (NLP + LLM):</strong> Adds an AI-powered deep analysis to catch subtle, contextual PII that patterns might miss. More thorough but slower. (~98% accuracy)
+                            </span>
+                        </div>
+                    </div>
+                    <select id="sanitizeModeSelect" class="file-type-select">
+                        <option value="nlp" selected>Fast (NLP Only)</option>
+                        <option value="nlp_llm">Detailed (NLP + LLM)</option>
+                    </select>
+                </div>
+
+
                 <button id="sanitizeBtn" class="btn-primary" disabled>
                     <span id="btnText">Sanitize File</span>
                     <span id="btnSpinner" class="spinner" style="display: none;"></span>
@@ -596,6 +673,7 @@
                 </div>
                 <h2>Sanitization Complete!</h2>
                 <p>Your file has been successfully sanitized and is ready to download.</p>
+                <p id="downloadNote" style="font-size: 0.9rem; color: #555; margin-bottom: 2rem;"></p>
                 <div class="download-buttons">
                     <button id="downloadBtn" class="btn-download">Download Sanitized File</button>
                     <button id="sanitizeAnotherBtn" class="btn-secondary-download">Sanitize Another File</button>
@@ -660,21 +738,6 @@
         </div>
     </div>
 
-    <!-- Success Modal -->
-    <div id="successModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-icon success">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-            </div>
-            <h2>Sanitization Complete!</h2>
-            <p>Your file has been successfully sanitized and is ready to download.</p>
-            <button id="downloadBtn" class="btn-primary" style="margin-bottom: 0.5rem;">Download Sanitized File</button>
-            <button id="sanitizeAnother" class="btn-secondary">Sanitize Another File</button>
-        </div>
-    </div>
-
     <!-- Error Modal -->
     <div id="errorModal" class="modal" style="display: none;">
         <div class="modal-content">
@@ -690,7 +753,34 @@
             <button id="closeError" class="btn-secondary">Close</button>
         </div>
     </div>
+    
+    <!-- NEW: Detailed Mode Warning Modal -->
+    <div id="llmWarningModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-icon warning">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+            </div>
+            <h2>Enable Detailed Sanitization?</h2>
+            <p>
+                The Detailed (NLP + LLM) mode is more thorough but may take significantly longer to process, especially for large files.
+                <br><br>
+                Use this mode only if you need the highest level of accuracy for detecting subtle or complex PII.
+            </p>
+            <div class="modal-buttons">
+                <button id="confirmLlmMode" class="btn-primary">Proceed</button>
+                <button id="cancelLlmMode" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
 
     <script src="app.js"></script>
 </body>
 </html>
+
+
+
