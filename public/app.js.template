@@ -1,5 +1,6 @@
 // --- Configuration for Celery Backend ---
-const API_BASE_URL = 'http://10.46.70.26:5001';
+// Use a placeholder that will be replaced by envsubst during container startup
+const API_BASE_URL = '${API_BASE_URL}'; // CORRECTED Placeholder format
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls', '.txt'];
 const FILE_TYPE_MAP = {
@@ -37,16 +38,15 @@ const downloadSection = document.getElementById('downloadSection');
 const downloadBtn = document.getElementById('downloadBtn');
 const sanitizeAnotherBtn = document.getElementById('sanitizeAnotherBtn');
 const cancelBtn = document.getElementById('cancelBtn');
-
-// --- NEW: LLM Warning Modal Elements ---
 const llmWarningModal = document.getElementById('llmWarningModal');
 const confirmLlmMode = document.getElementById('confirmLlmMode');
 const cancelLlmMode = document.getElementById('cancelLlmMode');
 
-
-// Initialize
+// --- Initialization ---
 function init() {
     setupEventListeners();
+    // Optional: Check if already authenticated on page load
+    checkInitialAuth();
 }
 
 function setupEventListeners() {
@@ -58,26 +58,13 @@ function setupEventListeners() {
     fileTypeSelect.addEventListener('change', handleFileTypeChange);
     sanitizeModeSelect.addEventListener('change', handleSanitizeModeChange);
     sanitizeBtn.addEventListener('click', handleSanitize);
-    if (cancelBtn) {
-        cancelBtn.addEventListener('click', handleCancel);
-    }
+    if (cancelBtn) cancelBtn.addEventListener('click', handleCancel);
     closeError.addEventListener('click', () => hideModal(errorModal));
-    if (sanitizeAnotherBtn) {
-        sanitizeAnotherBtn.addEventListener('click', resetForm);
-    }
-    
-    // --- NEW: Event Listeners for LLM Warning Modal ---
-    confirmLlmMode.addEventListener('click', () => {
-        selectedSanitizeMode = 'nlp_llm';
-        sanitizeModeSelect.value = 'nlp_llm'; // Make sure dropdown reflects this
-        hideModal(llmWarningModal);
-    });
-    cancelLlmMode.addEventListener('click', () => {
-        // Revert the selection in the dropdown
-        sanitizeModeSelect.value = 'nlp';
-        hideModal(llmWarningModal);
-    });
-    
+    if (sanitizeAnotherBtn) sanitizeAnotherBtn.addEventListener('click', resetForm);
+    if (confirmLlmMode) confirmLlmMode.addEventListener('click', handleConfirmLlmMode);
+    if (cancelLlmMode) cancelLlmMode.addEventListener('click', handleCancelLlmMode);
+
+    // Setup About modal listeners
     const aboutBtn = document.getElementById('aboutBtn');
     const aboutModal = document.getElementById('aboutModal');
     const closeAbout = document.getElementById('closeAbout');
@@ -88,6 +75,7 @@ function setupEventListeners() {
             if (e.target === aboutModal) hideModal(aboutModal);
         });
     }
+    // Setup Feedback button listener
     const feedbackBtn = document.getElementById('feedbackBtn');
     if (feedbackBtn) {
         feedbackBtn.addEventListener('click', () => {
@@ -96,6 +84,7 @@ function setupEventListeners() {
     }
 }
 
+// --- Drag and Drop / File Selection Handlers ---
 function handleDragOver(e) { e.preventDefault(); dropZone.classList.add('drag-over'); }
 function handleDragLeave(e) { e.preventDefault(); dropZone.classList.remove('drag-over'); }
 function handleDrop(e) {
@@ -150,16 +139,69 @@ function handleFileTypeChange(e) {
     updateStatus('File ready to sanitize', 'default');
 }
 
-// --- MODIFIED: handleSanitizeModeChange to show warning ---
+/**
+ * Checks authentication status on page load by calling the backend.
+ * Triggers redirect via handleApiResponse if not authenticated.
+ */
+async function checkInitialAuth() {
+    console.log("Checking initial authentication status...");
+    try {
+        const response = await fetch(`${API_BASE_URL}/check_auth`, {
+            // Credentials 'include' is needed to SEND cookies
+            credentials: 'include'
+        });
+
+        // Use handleApiResponse to check for 401 and handle redirect or errors
+        const data = await handleApiResponse(response, 'Initial authentication check');
+
+        if (data === null) {
+            // A redirect to login was triggered by handleApiResponse
+            console.log("Redirecting to login...");
+            // Optionally update UI to show "Redirecting..."
+             updateStatus('STATUS: Redirecting to login...', 'processing');
+        } else if (data && data.status === 'authenticated') {
+            // User is already authenticated (valid session cookie)
+            console.log(`User ${data.username || '(API Key)'} is authenticated.`);
+            // Optionally update UI to show user is logged in
+            // e.g., document.getElementById('userInfo').textContent = `Logged in as: ${data.username}`;
+             updateStatus('STATUS: Authenticated. Ready to sanitize files.', 'default');
+        } else {
+             // Should not happen if backend returns 401 correctly, but handle unexpected success response
+             console.warn("Auth check returned unexpected data:", data);
+             updateStatus('STATUS: Authentication check unclear. Proceed with caution.', 'default');
+        }
+
+    } catch (error) {
+        // Errors from handleApiResponse or fetch itself
+        console.error('Initial authentication check failed:', error);
+        // Don't redirect here, handleApiResponse already did if it was a 401 with login_url
+        // Just show an error if it wasn't a redirectable 401
+        if (window.location.href !== (error.login_url || '')) { // Avoid showing error if redirect is happening
+             showError(`Failed to verify authentication status: ${error.message}. Please try logging in or refreshing.`);
+             updateStatus('STATUS: Authentication check failed', 'error');
+        }
+    }
+}
+// --- End of new function ---
 function handleSanitizeModeChange(e) {
     const newMode = e.target.value;
     if (newMode === 'nlp_llm') {
-        // If user selects detailed mode, show the warning modal
         showModal(llmWarningModal);
     } else {
-        // Otherwise, just update the state
         selectedSanitizeMode = newMode;
     }
+}
+
+function handleConfirmLlmMode() {
+    selectedSanitizeMode = 'nlp_llm';
+    sanitizeModeSelect.value = 'nlp_llm';
+    hideModal(llmWarningModal);
+}
+
+function handleCancelLlmMode() {
+    sanitizeModeSelect.value = 'nlp';
+    selectedSanitizeMode = 'nlp';
+    hideModal(llmWarningModal);
 }
 
 function validateFile(file) {
@@ -169,44 +211,122 @@ function validateFile(file) {
     return { valid: true };
 }
 
+// --- API Interaction & Authentication Handling ---
+
+/**
+ * Handles responses, checking for 401 Unauthorized and redirecting if needed.
+ * @param {Response} response - The Fetch API Response object.
+ * @param {string} operationDesc - Description of the operation for error messages.
+ * @returns {Promise<object|null>} - Resolves with parsed JSON data or null if redirected. Rejects on other errors.
+ */
+async function handleApiResponse(response, operationDesc) {
+    if (response.status === 401) {
+        console.warn(`${operationDesc} failed: 401 Unauthorized.`);
+        updateStatus('STATUS: Authentication required', 'error');
+        try {
+            const data = await response.json();
+            if (data && data.login_url) {
+                console.log(`Redirecting to login URL: ${data.login_url}`);
+                // Redirect the browser to the login page provided by the backend
+                window.location.href = data.login_url;
+                return null; // Indicate redirection happened
+            } else {
+                // 401 but no login URL - show generic error
+                throw new Error('Authentication required, but no login URL provided by the server.');
+            }
+        } catch (jsonError) {
+            // Failed to parse JSON body from 401 response
+            console.error('Failed to parse 401 response body:', jsonError);
+            throw new Error('Authentication required. Please log in.');
+        }
+    }
+
+    if (!response.ok) {
+        // Handle other non-401 errors
+        let errorData;
+        try {
+            errorData = await response.json();
+        } catch (e) {
+            errorData = { error: `Server error: ${response.status} ${response.statusText}` };
+        }
+        console.error(`${operationDesc} failed:`, errorData);
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+    }
+
+    // --- Response Handling for different content types ---
+    const contentType = response.headers.get("content-type");
+
+    // Handle JSON responses (like status checks, job submission success)
+    if (contentType && contentType.indexOf("application/json") !== -1) {
+        try {
+            return await response.json();
+        } catch (e) {
+            console.error('Failed to parse successful JSON response:', e);
+            throw new Error('Received an invalid JSON response from the server.');
+        }
+    }
+    // Handle Blob responses (like file downloads)
+    else if (response.ok && response.status !== 204) { // 204 No Content has no body
+        try {
+            // For file downloads, we often need the blob and headers, not JSON
+             return {
+                blob: await response.blob(),
+                headers: response.headers
+             };
+        } catch (e) {
+            console.error('Failed to get blob from successful response:', e);
+            throw new Error('Received an invalid file response from the server.');
+        }
+    }
+     // Handle empty successful responses (like 204 No Content)
+    else if (response.ok) {
+         return {}; // Return empty object or null as appropriate
+    }
+    // Fallback for unexpected content types or errors already thrown
+    else {
+        // Error should have been thrown by previous checks, but added for safety
+        throw new Error(`Unexpected response status: ${response.status}`);
+    }
+}
+
+
 async function handleSanitize() {
     if (!selectedFile || !selectedFileType) {
         showError('Please select a file type before sanitizing');
         return;
     }
     if (downloadSection) downloadSection.style.display = 'none';
-    
+
     setProcessingState(true);
     updateStatus('STATUS: Submitting job...', 'processing');
-    
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('file_type', selectedFileType);
+    formData.append('use_llm', selectedSanitizeMode === 'nlp_llm');
+
     try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('file_type', selectedFileType);
-        
-        const useLLM = selectedSanitizeMode === 'nlp_llm';
-        formData.append('use_llm', useLLM);
-        
         const response = await fetch(`${API_BASE_URL}/sanitize_csv`, {
             method: 'POST',
             body: formData,
+            // Credentials 'include' is needed to SEND cookies to the backend
+            credentials: 'include'
         });
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
-            throw new Error(errorData.error || `Server error: ${response.status}`);
-        }
+        const data = await handleApiResponse(response, 'Sanitization submission');
 
-        const data = await response.json();
-        const jobId = data.job_id;
+        // If handleApiResponse returned null, it means a redirect happened. Stop processing.
+        if (data === null) return;
 
-        if (jobId) {
-            pollStatus(jobId);
+        if (data && data.job_id) {
+            pollStatus(data.job_id);
         } else {
-            throw new Error('Failed to get a valid job ID from the server.');
+            // Handle case where response was OK but didn't contain job_id
+            throw new Error('Server response did not include a valid job ID.');
         }
 
     } catch (error) {
+        // Errors thrown by handleApiResponse or fetch itself are caught here
         console.error('Sanitization submission error:', error);
         updateStatus('STATUS: Job submission failed', 'error');
         showError(error.message || 'An error occurred during job submission.');
@@ -216,16 +336,29 @@ async function handleSanitize() {
 
 function pollStatus(jobId) {
     updateStatus('STATUS: Job queued. Waiting for worker...', 'processing');
-    
+
+    // Clear any previous interval just in case
+    if (pollInterval) clearInterval(pollInterval);
+
     pollInterval = setInterval(async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/status/${jobId}`);
-            if (!response.ok) {
-                throw new Error('Server returned an error while checking status.');
+            const response = await fetch(`${API_BASE_URL}/status/${jobId}`, {
+                // Credentials 'include' is needed to SEND cookies to the backend
+                credentials: 'include'
+            });
+
+            // Use handleApiResponse to check for 401 and handle errors
+            const data = await handleApiResponse(response, `Polling status for job ${jobId}`);
+
+            // If redirect happened, clear interval and stop
+            if (data === null) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                setProcessingState(false); // Reset button state
+                return;
             }
 
-            const data = await response.json();
-
+            // Process valid status data
             if (data.state === 'PROGRESS') {
                 updateStatus(`STATUS: ${data.status || 'Processing...'}`, 'processing');
             } else if (data.state === 'PENDING') {
@@ -247,30 +380,40 @@ function pollStatus(jobId) {
                 }
             }
         } catch (error) {
+            // Errors from handleApiResponse or fetch are caught here
             console.error('Polling Error:', error);
             clearInterval(pollInterval);
             pollInterval = null;
-            updateStatus('STATUS: Connection lost', 'error');
-            showError('Failed to get job status. Please check the network and try again.');
+            updateStatus('STATUS: Connection lost or Auth Error', 'error');
+            // Avoid showing login URL here as it might loop if auth fails repeatedly
+            showError(error.message || 'Failed to get job status. Please check network or try logging in again.');
             setProcessingState(false);
         }
-    }, 3000);
+    }, 3000); // Poll every 3 seconds
 }
+
 
 function showDownloadLink(jobId) {
     if (downloadSection) {
+        // The /result endpoint triggers a file download via Content-Disposition header
+        // Browser navigation handles this correctly, including sending cookies.
         const resultUrl = `${API_BASE_URL}/result/${jobId}`;
         const downloadNote = document.getElementById('downloadNote');
-        
+
         if (['xlsx', 'xls', 'xlsx_generic'].includes(selectedFileType)) {
             downloadNote.textContent = 'Note: Multi-sheet Excel files are returned as a single .xlsx file with each sanitized sheet as a separate tab.';
         } else {
             downloadNote.textContent = '';
         }
 
+        // --- Simplified Download ---
+        // Clicking the button simply navigates the browser to the result URL
         downloadBtn.onclick = () => {
-            window.location.href = resultUrl;
+             console.log(`Attempting download from: ${resultUrl}`);
+             window.location.href = resultUrl;
         };
+        // --- End Simplified Download ---
+
         downloadSection.style.display = 'block';
         downloadSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -303,7 +446,7 @@ function setProcessingState(isProcessing) {
 
 function updateStatus(message, type = 'default') {
     statusText.textContent = message;
-    statusBox.className = 'status-box';
+    statusBox.className = 'status-box'; // Reset classes
     statusBox.style.display = 'block';
     if (type === 'processing') statusBox.classList.add('processing');
     else if (type === 'success') statusBox.classList.add('success');
@@ -315,8 +458,8 @@ function showError(message) {
     showModal(errorModal);
 }
 
-function showModal(modal) { modal.style.display = 'flex'; }
-function hideModal(modal) { modal.style.display = 'none'; }
+function showModal(modal) { if(modal) modal.style.display = 'flex'; }
+function hideModal(modal) { if(modal) modal.style.display = 'none'; }
 
 function resetForm() {
     if (pollInterval) {
@@ -326,8 +469,9 @@ function resetForm() {
     selectedFile = null;
     selectedFileType = null;
     selectedSanitizeMode = 'nlp'; // Reset to FAST mode
-    fileInput.value = '';
+    fileInput.value = ''; // Clear the file input
     fileInfo.style.display = 'none';
+    fileName.textContent = '';
     fileTypeSection.style.display = 'none';
     sanitizeModeSection.style.display = 'none';
     fileTypeSelect.value = '';
@@ -339,7 +483,9 @@ function resetForm() {
     if (downloadSection) {
         downloadSection.style.display = 'none';
     }
+    setProcessingState(false); // Ensure buttons are reset
 }
 
+// Run init function when the DOM is fully loaded
 document.addEventListener('DOMContentLoaded', init);
 
