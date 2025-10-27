@@ -1,7 +1,8 @@
-// --- MODIFIED: Configuration for Celery Backend ---
-const API_BASE_URL = 'http://10.46.70.26:5001'; // Use a base URL now
+// --- Configuration for Celery Backend ---
+// Use a placeholder that will be replaced by envsubst during container startup
+const API_BASE_URL = '${API_BASE_URL}'; // CORRECTED Placeholder format
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls', '.txt']; // Added xls/xlsx
+const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls', '.txt'];
 const FILE_TYPE_MAP = {
     '.csv': 'csv',
     '.xlsx': 'xlsx',
@@ -9,13 +10,13 @@ const FILE_TYPE_MAP = {
     '.txt': 'txt'
 };
 
-// --- MODIFIED: State Management ---
+// --- State Management ---
 let selectedFile = null;
 let selectedFileType = null;
-let abortController = null;
-let pollInterval = null; // To hold the setInterval ID
+let selectedSanitizeMode = 'nlp'; // Default to FAST mode
+let pollInterval = null;
 
-// --- UNCHANGED: DOM Elements ---
+// --- DOM Elements ---
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const fileInfo = document.getElementById('fileInfo');
@@ -23,24 +24,29 @@ const fileName = document.getElementById('fileName');
 const fileTypeSection = document.getElementById('fileTypeSection');
 const fileTypeSelect = document.getElementById('fileTypeSelect');
 const fileTypeWarning = document.getElementById('fileTypeWarning');
+const sanitizeModeSection = document.getElementById('sanitizeModeSection');
+const sanitizeModeSelect = document.getElementById('sanitizeModeSelect');
 const sanitizeBtn = document.getElementById('sanitizeBtn');
 const btnText = document.getElementById('btnText');
 const btnSpinner = document.getElementById('btnSpinner');
 const statusBox = document.getElementById('statusBox');
 const statusText = document.getElementById('statusText');
-const successModal = document.getElementById('successModal');
 const errorModal = document.getElementById('errorModal');
 const errorMessage = document.getElementById('errorMessage');
-const sanitizeAnother = document.getElementById('sanitizeAnother');
 const closeError = document.getElementById('closeError');
 const downloadSection = document.getElementById('downloadSection');
 const downloadBtn = document.getElementById('downloadBtn');
 const sanitizeAnotherBtn = document.getElementById('sanitizeAnotherBtn');
 const cancelBtn = document.getElementById('cancelBtn');
+const llmWarningModal = document.getElementById('llmWarningModal');
+const confirmLlmMode = document.getElementById('confirmLlmMode');
+const cancelLlmMode = document.getElementById('cancelLlmMode');
 
-// Initialize
+// --- Initialization ---
 function init() {
     setupEventListeners();
+    // Optional: Check if already authenticated on page load
+    // checkInitialAuth();
 }
 
 function setupEventListeners() {
@@ -50,21 +56,15 @@ function setupEventListeners() {
     dropZone.addEventListener('dragleave', handleDragLeave);
     dropZone.addEventListener('drop', handleDrop);
     fileTypeSelect.addEventListener('change', handleFileTypeChange);
+    sanitizeModeSelect.addEventListener('change', handleSanitizeModeChange);
     sanitizeBtn.addEventListener('click', handleSanitize);
-    if (cancelBtn) {
-        cancelBtn.addEventListener('click', handleCancel);
-    }
-    sanitizeAnother.addEventListener('click', resetForm);
+    if (cancelBtn) cancelBtn.addEventListener('click', handleCancel);
     closeError.addEventListener('click', () => hideModal(errorModal));
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', () => {
-            // The download button is now a link, but we can still trigger it
-            // This is handled when the link is created in showDownloadLink
-        });
-    }
-    if (sanitizeAnotherBtn) {
-        sanitizeAnotherBtn.addEventListener('click', resetForm);
-    }
+    if (sanitizeAnotherBtn) sanitizeAnotherBtn.addEventListener('click', resetForm);
+    if (confirmLlmMode) confirmLlmMode.addEventListener('click', handleConfirmLlmMode);
+    if (cancelLlmMode) cancelLlmMode.addEventListener('click', handleCancelLlmMode);
+
+    // Setup About modal listeners
     const aboutBtn = document.getElementById('aboutBtn');
     const aboutModal = document.getElementById('aboutModal');
     const closeAbout = document.getElementById('closeAbout');
@@ -75,6 +75,7 @@ function setupEventListeners() {
             if (e.target === aboutModal) hideModal(aboutModal);
         });
     }
+    // Setup Feedback button listener
     const feedbackBtn = document.getElementById('feedbackBtn');
     if (feedbackBtn) {
         feedbackBtn.addEventListener('click', () => {
@@ -83,7 +84,7 @@ function setupEventListeners() {
     }
 }
 
-// --- UNCHANGED: Drag/Drop and File Handling ---
+// --- Drag and Drop / File Selection Handlers ---
 function handleDragOver(e) { e.preventDefault(); dropZone.classList.add('drag-over'); }
 function handleDragLeave(e) { e.preventDefault(); dropZone.classList.remove('drag-over'); }
 function handleDrop(e) {
@@ -95,7 +96,6 @@ function handleFileSelect(e) {
     if (e.target.files.length > 0) handleFile(e.target.files[0]);
 }
 
-// --- UNCHANGED: File Validation and UI Updates ---
 function handleFile(file) {
     const validation = validateFile(file);
     if (!validation.valid) {
@@ -109,6 +109,7 @@ function handleFile(file) {
     const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     const detectedType = FILE_TYPE_MAP[fileExt] || '';
     fileTypeSection.style.display = 'block';
+    sanitizeModeSection.style.display = 'block';
     fileTypeSelect.value = detectedType;
     selectedFileType = detectedType;
     fileTypeWarning.style.display = 'none';
@@ -138,6 +139,27 @@ function handleFileTypeChange(e) {
     updateStatus('File ready to sanitize', 'default');
 }
 
+function handleSanitizeModeChange(e) {
+    const newMode = e.target.value;
+    if (newMode === 'nlp_llm') {
+        showModal(llmWarningModal);
+    } else {
+        selectedSanitizeMode = newMode;
+    }
+}
+
+function handleConfirmLlmMode() {
+    selectedSanitizeMode = 'nlp_llm';
+    sanitizeModeSelect.value = 'nlp_llm';
+    hideModal(llmWarningModal);
+}
+
+function handleCancelLlmMode() {
+    sanitizeModeSelect.value = 'nlp';
+    selectedSanitizeMode = 'nlp';
+    hideModal(llmWarningModal);
+}
+
 function validateFile(file) {
     if (file.size > MAX_FILE_SIZE) return { valid: false, message: `File size exceeds ${MAX_FILE_SIZE / (1024 * 1024)}MB limit` };
     const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
@@ -145,45 +167,122 @@ function validateFile(file) {
     return { valid: true };
 }
 
-// --- REWRITTEN: handleSanitize to start the job ---
+// --- API Interaction & Authentication Handling ---
+
+/**
+ * Handles responses, checking for 401 Unauthorized and redirecting if needed.
+ * @param {Response} response - The Fetch API Response object.
+ * @param {string} operationDesc - Description of the operation for error messages.
+ * @returns {Promise<object|null>} - Resolves with parsed JSON data or null if redirected. Rejects on other errors.
+ */
+async function handleApiResponse(response, operationDesc) {
+    if (response.status === 401) {
+        console.warn(`${operationDesc} failed: 401 Unauthorized.`);
+        updateStatus('STATUS: Authentication required', 'error');
+        try {
+            const data = await response.json();
+            if (data && data.login_url) {
+                console.log(`Redirecting to login URL: ${data.login_url}`);
+                // Redirect the browser to the login page provided by the backend
+                window.location.href = data.login_url;
+                return null; // Indicate redirection happened
+            } else {
+                // 401 but no login URL - show generic error
+                throw new Error('Authentication required, but no login URL provided by the server.');
+            }
+        } catch (jsonError) {
+            // Failed to parse JSON body from 401 response
+            console.error('Failed to parse 401 response body:', jsonError);
+            throw new Error('Authentication required. Please log in.');
+        }
+    }
+
+    if (!response.ok) {
+        // Handle other non-401 errors
+        let errorData;
+        try {
+            errorData = await response.json();
+        } catch (e) {
+            errorData = { error: `Server error: ${response.status} ${response.statusText}` };
+        }
+        console.error(`${operationDesc} failed:`, errorData);
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+    }
+
+    // --- Response Handling for different content types ---
+    const contentType = response.headers.get("content-type");
+
+    // Handle JSON responses (like status checks, job submission success)
+    if (contentType && contentType.indexOf("application/json") !== -1) {
+        try {
+            return await response.json();
+        } catch (e) {
+            console.error('Failed to parse successful JSON response:', e);
+            throw new Error('Received an invalid JSON response from the server.');
+        }
+    }
+    // Handle Blob responses (like file downloads)
+    else if (response.ok && response.status !== 204) { // 204 No Content has no body
+        try {
+            // For file downloads, we often need the blob and headers, not JSON
+             return {
+                blob: await response.blob(),
+                headers: response.headers
+             };
+        } catch (e) {
+            console.error('Failed to get blob from successful response:', e);
+            throw new Error('Received an invalid file response from the server.');
+        }
+    }
+     // Handle empty successful responses (like 204 No Content)
+    else if (response.ok) {
+         return {}; // Return empty object or null as appropriate
+    }
+    // Fallback for unexpected content types or errors already thrown
+    else {
+        // Error should have been thrown by previous checks, but added for safety
+        throw new Error(`Unexpected response status: ${response.status}`);
+    }
+}
+
+
 async function handleSanitize() {
     if (!selectedFile || !selectedFileType) {
         showError('Please select a file type before sanitizing');
         return;
     }
     if (downloadSection) downloadSection.style.display = 'none';
-    
+
     setProcessingState(true);
     updateStatus('STATUS: Submitting job...', 'processing');
-    
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('file_type', selectedFileType);
+    formData.append('use_llm', selectedSanitizeMode === 'nlp_llm');
+
     try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('file_type', selectedFileType);
-        formData.append('use_llm', 'true');
-        
-        // 1. Submit the file to get a job_id
         const response = await fetch(`${API_BASE_URL}/sanitize_csv`, {
             method: 'POST',
             body: formData,
+            // Credentials 'include' is needed to SEND cookies to the backend
+            credentials: 'include'
         });
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
-            throw new Error(errorData.error || `Server error: ${response.status}`);
-        }
+        const data = await handleApiResponse(response, 'Sanitization submission');
 
-        const data = await response.json();
-        const jobId = data.job_id;
+        // If handleApiResponse returned null, it means a redirect happened. Stop processing.
+        if (data === null) return;
 
-        // 2. Start polling for the status of the job
-        if (jobId) {
-            pollStatus(jobId);
+        if (data && data.job_id) {
+            pollStatus(data.job_id);
         } else {
-            throw new Error('Failed to get a valid job ID from the server.');
+            // Handle case where response was OK but didn't contain job_id
+            throw new Error('Server response did not include a valid job ID.');
         }
 
     } catch (error) {
+        // Errors thrown by handleApiResponse or fetch itself are caught here
         console.error('Sanitization submission error:', error);
         updateStatus('STATUS: Job submission failed', 'error');
         showError(error.message || 'An error occurred during job submission.');
@@ -191,28 +290,37 @@ async function handleSanitize() {
     }
 }
 
-// --- NEW: pollStatus function ---
 function pollStatus(jobId) {
     updateStatus('STATUS: Job queued. Waiting for worker...', 'processing');
-    
+
+    // Clear any previous interval just in case
+    if (pollInterval) clearInterval(pollInterval);
+
     pollInterval = setInterval(async () => {
         try {
-            const response = await fetch(`${API_BASE_URL}/status/${jobId}`);
-            if (!response.ok) {
-                // If status check fails, stop polling and show error
-                throw new Error('Server returned an error while checking status.');
+            const response = await fetch(`${API_BASE_URL}/status/${jobId}`, {
+                // Credentials 'include' is needed to SEND cookies to the backend
+                credentials: 'include'
+            });
+
+            // Use handleApiResponse to check for 401 and handle errors
+            const data = await handleApiResponse(response, `Polling status for job ${jobId}`);
+
+            // If redirect happened, clear interval and stop
+            if (data === null) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                setProcessingState(false); // Reset button state
+                return;
             }
 
-            const data = await response.json();
-
-            // Update UI based on the state from the server
+            // Process valid status data
             if (data.state === 'PROGRESS') {
                 updateStatus(`STATUS: ${data.status || 'Processing...'}`, 'processing');
             } else if (data.state === 'PENDING') {
                 updateStatus('STATUS: Job is pending...', 'processing');
             }
 
-            // If the job is finished (SUCCESS or FAILURE)
             if (data.state === 'SUCCESS' || data.state === 'FAILURE') {
                 clearInterval(pollInterval);
                 pollInterval = null;
@@ -228,24 +336,40 @@ function pollStatus(jobId) {
                 }
             }
         } catch (error) {
+            // Errors from handleApiResponse or fetch are caught here
             console.error('Polling Error:', error);
-            clearInterval(pollInterval); // Stop polling on network or server error
+            clearInterval(pollInterval);
             pollInterval = null;
-            updateStatus('STATUS: Connection lost', 'error');
-            showError('Failed to get job status. Please check the network and try again.');
+            updateStatus('STATUS: Connection lost or Auth Error', 'error');
+            // Avoid showing login URL here as it might loop if auth fails repeatedly
+            showError(error.message || 'Failed to get job status. Please check network or try logging in again.');
             setProcessingState(false);
         }
     }, 3000); // Poll every 3 seconds
 }
 
-// --- NEW: showDownloadLink function ---
+
 function showDownloadLink(jobId) {
     if (downloadSection) {
+        // The /result endpoint triggers a file download via Content-Disposition header
+        // Browser navigation handles this correctly, including sending cookies.
         const resultUrl = `${API_BASE_URL}/result/${jobId}`;
-        // Set the href for the download button which is now an anchor tag in spirit
+        const downloadNote = document.getElementById('downloadNote');
+
+        if (['xlsx', 'xls', 'xlsx_generic'].includes(selectedFileType)) {
+            downloadNote.textContent = 'Note: Multi-sheet Excel files are returned as a single .xlsx file with each sanitized sheet as a separate tab.';
+        } else {
+            downloadNote.textContent = '';
+        }
+
+        // --- Simplified Download ---
+        // Clicking the button simply navigates the browser to the result URL
         downloadBtn.onclick = () => {
-            window.location.href = resultUrl;
+             console.log(`Attempting download from: ${resultUrl}`);
+             window.location.href = resultUrl;
         };
+        // --- End Simplified Download ---
+
         downloadSection.style.display = 'block';
         downloadSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -253,8 +377,6 @@ function showDownloadLink(jobId) {
 
 
 function handleCancel() {
-    // Note: This only cancels the polling from the client-side.
-    // The server-side task will continue to run.
     if (pollInterval) {
         clearInterval(pollInterval);
         pollInterval = null;
@@ -263,7 +385,6 @@ function handleCancel() {
     }
 }
 
-// --- UNCHANGED: UI Helper Functions ---
 function setProcessingState(isProcessing) {
     sanitizeBtn.disabled = isProcessing;
     if (isProcessing) {
@@ -281,7 +402,7 @@ function setProcessingState(isProcessing) {
 
 function updateStatus(message, type = 'default') {
     statusText.textContent = message;
-    statusBox.className = 'status-box';
+    statusBox.className = 'status-box'; // Reset classes
     statusBox.style.display = 'block';
     if (type === 'processing') statusBox.classList.add('processing');
     else if (type === 'success') statusBox.classList.add('success');
@@ -293,10 +414,9 @@ function showError(message) {
     showModal(errorModal);
 }
 
-function showModal(modal) { modal.style.display = 'flex'; }
-function hideModal(modal) { modal.style.display = 'none'; }
+function showModal(modal) { if(modal) modal.style.display = 'flex'; }
+function hideModal(modal) { if(modal) modal.style.display = 'none'; }
 
-// --- MODIFIED: resetForm to clear polling ---
 function resetForm() {
     if (pollInterval) {
         clearInterval(pollInterval);
@@ -304,10 +424,14 @@ function resetForm() {
     }
     selectedFile = null;
     selectedFileType = null;
-    fileInput.value = '';
+    selectedSanitizeMode = 'nlp'; // Reset to FAST mode
+    fileInput.value = ''; // Clear the file input
     fileInfo.style.display = 'none';
+    fileName.textContent = '';
     fileTypeSection.style.display = 'none';
+    sanitizeModeSection.style.display = 'none';
     fileTypeSelect.value = '';
+    sanitizeModeSelect.value = 'nlp'; // Reset dropdown to FAST
     fileTypeWarning.style.display = 'none';
     sanitizeBtn.disabled = true;
     statusBox.style.display = 'block';
@@ -315,8 +439,9 @@ function resetForm() {
     if (downloadSection) {
         downloadSection.style.display = 'none';
     }
-    hideModal(successModal);
+    setProcessingState(false); // Ensure buttons are reset
 }
 
+// Run init function when the DOM is fully loaded
 document.addEventListener('DOMContentLoaded', init);
 
